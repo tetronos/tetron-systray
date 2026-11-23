@@ -12,11 +12,13 @@ name = "tetron-systray"
 path = "src/main.rs"
 
 [dependencies]
-# Floating on tetron's main branch, not a pinned tag -- same reasoning as
-# tetron-webui's own Cargo.toml comment: the real compatibility risk is
-# which *binaries* are running together, and tetron-proto's wire types
-# already use #[serde(default)] consistently for exactly that reason.
-tetron-proto = { git = "https://github.com/tetronos/tetron" }
+# Pinned to a tetron core release tag of this minor, not floating on main: a
+# bare git dependency lets Cargo.lock freeze any commit, so suite clients
+# drifted to different protocol revisions. contrib/bump-proto.sh moves the
+# tag; a tetron release opens that bump as a pull request (bump-proto.yml);
+# contrib/check-suite-deps.sh guards it. The wire types still use
+# #[serde(default)], so binaries of the same minor keep working together.
+tetron-proto = { git = "https://github.com/tetronos/tetron", tag = "v0.15.5" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 anyhow = "1"
 # Tray icon + native menu. Re-exports muda for menu construction, so no
