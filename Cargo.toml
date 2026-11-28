@@ -18,7 +18,7 @@ path = "src/main.rs"
 # tag; a tetron release opens that bump as a pull request (bump-proto.yml);
 # contrib/check-suite-deps.sh guards it. The wire types still use
 # #[serde(default)], so binaries of the same minor keep working together.
-tetron-proto = { git = "https://github.com/tetronos/tetron", tag = "v0.15.8" }
+tetron-proto = { git = "https://github.com/tetronos/tetron", tag = "v0.15.9" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 anyhow = "1"
 # Tray icon + native menu. Re-exports muda for menu construction, so no
