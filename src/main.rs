@@ -74,13 +74,22 @@ pub(crate) const FULL_VERSION: &str =
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
+    /// Port tetron-webui listens on, for "Open webui". Used by the Windows
+    /// autostart entry, which can not set environment variables; elsewhere
+    /// the service sets `TETRON_WEBUI_PORT`.
+    #[arg(long, hide = true)]
+    webui_port: Option<u16>,
 }
+
+/// `--webui-port`, when given; wins over `TETRON_WEBUI_PORT`.
+static WEBUI_PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
 
 #[derive(Subcommand)]
 enum Command {
     /// Install and start the per-user service (systemd --user on Linux,
-    /// a launchd LaunchAgent on macOS) so tetron-systray starts with your
-    /// graphical session instead of needing to be run manually
+    /// a launchd LaunchAgent on macOS, a sign-in autostart entry on Windows)
+    /// so tetron-systray starts with your graphical session instead of
+    /// needing to be run manually
     Install {
         /// Port tetron-webui listens on. Sets `TETRON_WEBUI_PORT` in the
         /// service unit so the tray's "open webui" menu item opens the
@@ -163,10 +172,12 @@ const MAX_MEMBER_ROWS: usize = 10;
 /// environment (same env var tetron-webui's own server and service install
 /// use); falls back to the default port 7870 if unset.
 fn webui_url() -> String {
-    let port = std::env::var("TETRON_WEBUI_PORT")
-        .ok()
-        .and_then(|v| v.parse::<u16>().ok())
-        .unwrap_or(7870u16);
+    let port = WEBUI_PORT.get().copied().unwrap_or_else(|| {
+        std::env::var("TETRON_WEBUI_PORT")
+            .ok()
+            .and_then(|v| v.parse::<u16>().ok())
+            .unwrap_or(7870u16)
+    });
     format!("http://127.0.0.1:{port}")
 }
 
@@ -421,6 +432,70 @@ fn open_webui() {
     let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(&url).spawn();
+    #[cfg(windows)]
+    windows_open_url(&url);
+}
+
+/// Windows: open `url` in the default browser.
+#[cfg(windows)]
+fn windows_open_url(url: &str) {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let wide = |s: &str| {
+        s.encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>()
+    };
+    let (verb, target) = (wide("open"), wide(url));
+    // SAFETY: both strings are NUL-terminated and outlive the call; the other
+    // pointers may be null.
+    unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
+/// Windows: drain the tray thread's message queue so the tray icon's hidden
+/// window receives its clicks and menu commands (the gtk/Cocoa pumps' role).
+#[cfg(windows)]
+fn windows_pump_messages() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
+    };
+    // SAFETY: MSG is plain data; PeekMessageW fills it before it is read.
+    let mut msg: MSG = unsafe { std::mem::zeroed() };
+    // SAFETY: a null window handle asks for any message of this thread.
+    while unsafe { PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) } != 0 {
+        // SAFETY: `msg` was just filled by PeekMessageW.
+        unsafe {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+}
+
+/// Windows: a console program, so a terminal waits for `install` and shows
+/// its output. Run as the tray from the sign-in autostart entry or by
+/// double-click, it gets a console window of its own; let that go so only
+/// the tray icon remains. Started from a terminal, the shared console stays
+/// (its log lines are useful there).
+#[cfg(windows)]
+fn release_own_console() {
+    use windows_sys::Win32::System::Console::{FreeConsole, GetConsoleProcessList};
+    let mut pids = [0u32; 2];
+    // SAFETY: `pids` is writable for its length; the call reports how many
+    // processes share this console.
+    let sharing = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), pids.len() as u32) };
+    if sharing == 1 {
+        // SAFETY: no arguments; detaches this process from its console.
+        unsafe { FreeConsole() };
+    }
 }
 
 /// Compute the desired member-row data for a network: self, then every peer,
@@ -788,6 +863,9 @@ fn macos_pump_events(app: &objc2_app_kit::NSApplication) {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    if let Some(port) = cli.webui_port {
+        let _ = WEBUI_PORT.set(port);
+    }
     match cli.command {
         Some(Command::Install { port }) => return service::install(port),
         Some(Command::Uninstall) => return service::uninstall(),
@@ -797,6 +875,9 @@ fn main() -> anyhow::Result<()> {
         }
         None => {}
     }
+
+    #[cfg(windows)]
+    release_own_console();
 
     #[cfg(target_os = "linux")]
     gtk::init()?;
@@ -859,6 +940,9 @@ fn main() -> anyhow::Result<()> {
         // never dispatched (see macos_pump_events's doc comment).
         #[cfg(target_os = "macos")]
         macos_pump_events(&macos_app);
+
+        #[cfg(windows)]
+        windows_pump_messages();
 
         if let Ok(result) = status_rx.try_recv() {
             match result {

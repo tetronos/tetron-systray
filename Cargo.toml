@@ -65,3 +65,12 @@ gtk = "0.18"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSEvent", "NSRunningApplication"] }
 objc2-foundation = { version = "0.3", features = ["NSDate"] }
+
+# Windows-only: the Win32 counterpart of the gtk and Cocoa pumps above. The
+# tray icon's hidden window receives clicks as window messages, so the
+# tray thread drains its message queue each tick (PeekMessageW/
+# DispatchMessageW). Also opens the web UI in the default browser
+# (ShellExecuteW) and lets go of the console window when it runs as the tray.
+# Same windows-sys version tetron core uses.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

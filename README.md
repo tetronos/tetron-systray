@@ -20,6 +20,8 @@ A menu-bar/tray status + quick-action client for [tetron](https://github.com/tet
 | **macOS app bundle** | `~/Applications/TetronSystray.app` |
 | **Linux logs** | systemd user journal (`journalctl --user -u tetron-systray`) |
 | **macOS logs** | `~/Library/Logs/tetron-systray.log` |
+| **Windows program** | `%LOCALAPPDATA%\Programs\tetron-systray\tetron-systray.exe` (copied there by `install`) |
+| **Windows autostart** | value `tetron-systray` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` |
 | **Config** | None persisted — state comes via IPC from the tetron daemon; a few optional env vars tune the webui port and polling cadence (below) |
 
 ## Running it
@@ -50,6 +52,14 @@ sudo install tetron-systray /usr/local/bin/tetron-systray
 
 tetron-systray install     # sets up + starts a per-user service, no sudo needed
 ```
+
+**Windows 10 and 11 (x86_64):** download `tetron-systray-x86_64-windows.exe` from the [releases page](https://github.com/tetronos/tetron-systray/releases/latest), then from an ordinary (not elevated) terminal in the download folder:
+
+```powershell
+.\tetron-systray-x86_64-windows.exe install
+```
+
+`install` copies the program to `%LOCALAPPDATA%\Programs\tetron-systray` (the download can then be deleted), adds a sign-in autostart entry for your user only, and starts it; no administrator rights are needed. The icon appears in the notification area (it may sit in the hidden-icons overflow until you drag it out). Reading status works for every user. Resume and standby from the tray need your account to be tetron's operator: `tetron install` makes the installing user the operator, and `tetron set-operator <account>` from an elevated terminal changes it. `tetron-systray uninstall` removes the autostart entry, stops the tray and deletes the copied program.
 
 Or install/upgrade tetron, tetron-webui, and tetron-systray together with [`contrib/install-tetron-suite.sh`](https://github.com/tetronos/tetron/blob/main/contrib/install-tetron-suite.sh) from the tetron repo — it's an extra, helpful wrapper around the same steps above, not a replacement for them.
 

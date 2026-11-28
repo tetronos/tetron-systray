@@ -11,7 +11,10 @@
 use std::path::{Path, PathBuf};
 
 /// The program the menu item launches.
+#[cfg(not(windows))]
 const TUI_BIN: &str = "tetron-tui";
+#[cfg(windows)]
+const TUI_BIN: &str = "tetron-tui.exe";
 
 /// Environment variable overriding the terminal command, as a command prefix
 /// that the tui path is appended to, e.g. `alacritty -e` or `kitty`.
@@ -56,17 +59,14 @@ fn is_executable_file(path: &Path) -> bool {
     let Ok(meta) = std::fs::metadata(path) else {
         return false;
     };
-    if !meta.is_file() {
-        return false;
-    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o111 != 0
+        meta.is_file() && meta.permissions().mode() & 0o111 != 0
     }
     #[cfg(not(unix))]
     {
-        true
+        meta.is_file()
     }
 }
 
@@ -107,6 +107,19 @@ fn macos_argv(tui: &Path) -> Vec<String> {
     ]
 }
 
+/// Windows: `start` opens the console program in a new console window
+/// (Windows Terminal when it is the default terminal). The first argument
+/// after `start` is the window title.
+fn windows_argv(tui: &Path) -> Vec<String> {
+    vec![
+        "cmd.exe".into(),
+        "/c".into(),
+        "start".into(),
+        "tetron-tui".into(),
+        tui.display().to_string(),
+    ]
+}
+
 /// Argv to launch, or `None` when no terminal can be found. An `override_cmd`
 /// (the [`TERMINAL_ENV`] value) wins when it has any words; a blank one is
 /// ignored.
@@ -124,6 +137,8 @@ pub fn launch_argv(
     }
     if cfg!(target_os = "macos") {
         Some(macos_argv(tui))
+    } else if cfg!(windows) {
+        Some(windows_argv(tui))
     } else {
         linux_argv(tui, dirs)
     }
@@ -148,7 +163,16 @@ pub fn open_tui() {
         );
         return;
     };
-    match std::process::Command::new(&argv[0])
+    let mut command = std::process::Command::new(&argv[0]);
+    // Windows: the `cmd /c start` helper itself gets no console window; the
+    // tui still opens in its own.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    match command
         .args(&argv[1..])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -170,7 +194,28 @@ pub fn open_tui() {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn windows_opens_the_tui_with_start_in_a_new_console() {
+        let tui = Path::new(r"C:\Tools\tetron-tui.exe");
+        assert_eq!(
+            launch_argv(tui, None, &[]).unwrap(),
+            [
+                "cmd.exe",
+                "/c",
+                "start",
+                "tetron-tui",
+                r"C:\Tools\tetron-tui.exe"
+            ]
+        );
+    }
+}
+
+// File-mode based: Unix only.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;

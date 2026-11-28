@@ -10,8 +10,10 @@
 //! (a tray icon + gtk event loop), not just a login session -- the Linux
 //! unit targets `graphical-session.target`, not `default.target`.
 
+#[cfg(not(windows))]
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+#[cfg(not(windows))]
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -106,13 +108,22 @@ pub fn install(port: u16) -> Result<()> {
         .context("failed to determine current executable path")?
         .to_string_lossy()
         .into_owned();
+    #[cfg(windows)]
+    return windows::install(&exe, port);
+    #[cfg(not(windows))]
+    unix_install(&exe, port)
+}
+
+/// Linux and macOS: write and load the unit/plist, then wait for it.
+#[cfg(not(windows))]
+fn unix_install(exe: &str, port: u16) -> Result<()> {
     let port_str = port.to_string();
 
     #[cfg(target_os = "linux")]
     {
         let path = unit_path()?;
         let unit = include_str!("../contrib/tetron-systray.service")
-            .replace("/usr/local/bin/tetron-systray", &exe)
+            .replace("/usr/local/bin/tetron-systray", exe)
             .replace("__TETRON_WEBUI_PORT__", &port_str);
         std::fs::write(&path, unit)
             .with_context(|| format!("failed to write {}", path.display()))?;
@@ -131,7 +142,7 @@ pub fn install(port: u16) -> Result<()> {
         // under the running process's own executable inode.
         let bundle = bundle_dir()?;
         let bundled_exe = bundle.join("Contents/MacOS/tetron-systray");
-        std::fs::copy(&exe, &bundled_exe)
+        std::fs::copy(exe, &bundled_exe)
             .with_context(|| format!("failed to copy binary into {}", bundled_exe.display()))?;
         let info_plist = include_str!("../contrib/TetronSystray-Info.plist")
             .replace("__VERSION__", env!("CARGO_PKG_VERSION"));
@@ -211,9 +222,180 @@ pub fn uninstall() -> Result<()> {
         return Ok(());
     }
 
+    #[cfg(windows)]
+    return windows::uninstall();
+
     #[allow(unreachable_code)]
     {
         anyhow::bail!("per-user service uninstall not supported on this platform");
+    }
+}
+
+/// Windows: a per-user autostart entry, the counterpart of the systemd user
+/// unit and the LaunchAgent. The program is copied to
+/// `%LOCALAPPDATA%\Programs\tetron-systray` (so the downloaded file can be
+/// deleted) and started at sign-in by a value under
+/// `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. No administrator
+/// rights are needed: everything is in the user's own profile.
+#[cfg(windows)]
+mod windows {
+    use std::os::windows::process::CommandExt;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::time::Duration;
+
+    use anyhow::{Context, Result};
+
+    use super::{run_cmd, run_cmd_quiet};
+
+    const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+    const RUN_VALUE: &str = "tetron-systray";
+    const EXE_NAME: &str = "tetron-systray.exe";
+    const DEFAULT_WEBUI_PORT: u16 = 7870;
+
+    fn install_dir() -> Result<PathBuf> {
+        Ok(dirs::data_local_dir()
+            .context("could not determine %LOCALAPPDATA%")?
+            .join("Programs")
+            .join("tetron-systray"))
+    }
+
+    /// Ends every other running tetron-systray of this user, never this
+    /// process (install and uninstall run as tetron-systray.exe too).
+    fn stop_other_instances() {
+        let pid = std::process::id().to_string();
+        run_cmd_quiet(
+            "taskkill",
+            &["/F", "/IM", EXE_NAME, "/FI", &format!("PID ne {pid}")],
+        );
+    }
+
+    /// The autostart command line: the quoted program, plus the web UI port
+    /// when it is not the default (a Run entry can not set environment).
+    pub(super) fn run_command(exe: &Path, port: u16) -> String {
+        let mut cmd = format!("\"{}\"", exe.display());
+        if port != DEFAULT_WEBUI_PORT {
+            cmd.push_str(&format!(" --webui-port {port}"));
+        }
+        cmd
+    }
+
+    pub(super) fn install(exe: &str, port: u16) -> Result<()> {
+        let dir = install_dir()?;
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("failed to create {}", dir.display()))?;
+        let installed = dir.join(EXE_NAME);
+        stop_other_instances();
+        if !same_file(Path::new(exe), &installed) {
+            // A just-stopped instance may hold the file for a moment.
+            let mut copied = std::fs::copy(exe, &installed);
+            for _ in 0..10 {
+                if copied.is_ok() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(300));
+                copied = std::fs::copy(exe, &installed);
+            }
+            copied.with_context(|| {
+                format!("failed to copy the program to {}", installed.display())
+            })?;
+        }
+        run_cmd(
+            "reg",
+            &[
+                "add",
+                RUN_KEY,
+                "/v",
+                RUN_VALUE,
+                "/t",
+                "REG_SZ",
+                "/d",
+                &run_command(&installed, port),
+                "/f",
+            ],
+        );
+
+        // Start it now, detached from this terminal.
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        let mut start = Command::new(&installed);
+        if port != DEFAULT_WEBUI_PORT {
+            start.args(["--webui-port", &port.to_string()]);
+        }
+        let mut child = start
+            .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+            .spawn()
+            .with_context(|| format!("failed to start {}", installed.display()))?;
+        eprintln!("waiting for tetron-systray to start…");
+        std::thread::sleep(Duration::from_secs(2));
+        match child.try_wait() {
+            Ok(None) => {
+                println!(
+                    "tetron-systray installed in {} and running; it starts when you sign in.",
+                    dir.display()
+                );
+                Ok(())
+            }
+            Ok(Some(status)) => {
+                anyhow::bail!("tetron-systray exited right after starting ({status})")
+            }
+            Err(e) => anyhow::bail!("could not check on tetron-systray: {e}"),
+        }
+    }
+
+    pub(super) fn uninstall() -> Result<()> {
+        let had_entry = Command::new("reg")
+            .args(["query", RUN_KEY, "/v", RUN_VALUE])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if had_entry {
+            run_cmd("reg", &["delete", RUN_KEY, "/v", RUN_VALUE, "/f"]);
+            println!("Removed the sign-in autostart entry.");
+        } else {
+            println!("Autostart entry not installed.");
+        }
+        stop_other_instances();
+        let dir = install_dir()?;
+        let running_from_dir = std::env::current_exe()
+            .map(|p| p.starts_with(&dir))
+            .unwrap_or(false);
+        if running_from_dir {
+            println!(
+                "{} is the running program; delete {} after this command exits.",
+                EXE_NAME,
+                dir.display()
+            );
+        } else if dir.exists() {
+            std::thread::sleep(Duration::from_millis(500));
+            std::fs::remove_dir_all(&dir)
+                .with_context(|| format!("failed to remove {}", dir.display()))?;
+            println!("Removed {}.", dir.display());
+        }
+        Ok(())
+    }
+
+    fn same_file(a: &Path, b: &Path) -> bool {
+        match (a.canonicalize(), b.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn run_command_quotes_the_path_and_adds_only_a_custom_port() {
+            let exe =
+                Path::new(r"C:\Users\me\AppData\Local\Programs\tetron-systray\tetron-systray.exe");
+            assert_eq!(
+                run_command(exe, 7870),
+                r#""C:\Users\me\AppData\Local\Programs\tetron-systray\tetron-systray.exe""#
+            );
+            assert!(run_command(exe, 8080).ends_with(r#"tetron-systray.exe" --webui-port 8080"#));
+        }
     }
 }
 
@@ -244,6 +426,7 @@ fn is_active() -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(not(windows))]
 fn wait_for_active(timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
