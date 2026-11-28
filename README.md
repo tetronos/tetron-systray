@@ -69,7 +69,7 @@ Installs a `systemd --user` unit on Linux, or a launchd **LaunchAgent** on macOS
 
 ### Port configuration
 
-The "Open webui" menu item opens `http://127.0.0.1:7870` by default.
+The "Open webui" menu item opens `http://127.0.0.1:7870` by default. When tetron-webui has made your sign-in token, the address carries it after `#` (read from tetron-webui's token file, the same one `tetron-webui open` uses), so the dashboard opens signed in.
 Override the port by setting the `TETRON_WEBUI_PORT` environment variable
 (both tetron-webui and tetron-systray read the same var), or by passing
 `--port` when installing:

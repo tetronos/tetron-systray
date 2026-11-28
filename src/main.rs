@@ -426,8 +426,35 @@ fn copy_to_clipboard(text: &str) {
     }
 }
 
+/// Where tetron-webui keeps this user's sign-in token (tetron-webui's
+/// `auth::token_path`): next to its log on Windows, the config directory
+/// elsewhere.
+fn webui_token_path() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    let base = dirs::data_local_dir();
+    #[cfg(not(windows))]
+    let base = dirs::config_dir();
+    base.map(|d| d.join("tetron-webui").join("token"))
+}
+
+/// The dashboard address to open: with this user's token after `#` when
+/// tetron-webui has made one, so the browser is signed in (the part after `#`
+/// is never sent to a server). Without a token the page explains how to sign
+/// in.
+fn webui_open_url(base: &str, token: Option<&str>) -> String {
+    match token {
+        Some(t) if t.len() == 64 && t.bytes().all(|b| b.is_ascii_hexdigit()) => {
+            format!("{base}/#token={t}")
+        }
+        _ => base.to_string(),
+    }
+}
+
 fn open_webui() {
-    let url = webui_url();
+    let token = webui_token_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| t.trim().to_string());
+    let url = webui_open_url(&webui_url(), token.as_deref());
     #[cfg(target_os = "linux")]
     let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
     #[cfg(target_os = "macos")]
@@ -1065,6 +1092,16 @@ mod tests {
             unreachable: Duration::from_secs(30),
             active_window: Duration::from_secs(20),
         }
+    }
+
+    #[test]
+    fn webui_open_url_adds_only_a_well_formed_token() {
+        let base = "http://127.0.0.1:7870";
+        let t = "ab".repeat(32);
+        assert_eq!(webui_open_url(base, Some(&t)), format!("{base}/#token={t}"));
+        assert_eq!(webui_open_url(base, None), base);
+        assert_eq!(webui_open_url(base, Some("short")), base);
+        assert_eq!(webui_open_url(base, Some(&"zz".repeat(32))), base);
     }
 
     #[test]
