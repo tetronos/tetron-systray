@@ -877,7 +877,15 @@ fn main() -> anyhow::Result<()> {
     }
 
     #[cfg(windows)]
-    release_own_console();
+    {
+        if service::double_click_install() {
+            return Ok(());
+        }
+        if service::already_running() {
+            return Ok(());
+        }
+        release_own_console();
+    }
 
     #[cfg(target_os = "linux")]
     gtk::init()?;

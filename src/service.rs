@@ -231,6 +231,59 @@ pub fn uninstall() -> Result<()> {
     }
 }
 
+/// Windows: started by double-click (a console of its own) from anywhere but
+/// its installed location, as when a downloaded file is opened from Explorer:
+/// install instead of running a second, uninstalled tray, then wait for Enter
+/// so the window does not vanish. Returns `false` when this is not such a
+/// start (a terminal, or the sign-in autostart of the installed copy).
+#[cfg(windows)]
+pub fn double_click_install() -> bool {
+    use windows_sys::Win32::System::Console::GetConsoleProcessList;
+    let mut pids = [0u32; 2];
+    // SAFETY: `pids` is writable for its length.
+    let sharing = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), pids.len() as u32) };
+    if sharing != 1 {
+        return false;
+    }
+    let installed = std::env::current_exe()
+        .ok()
+        .zip(windows::install_dir().ok())
+        .is_some_and(|(exe, dir)| exe.starts_with(dir));
+    if installed {
+        return false;
+    }
+    println!("tetron-systray: installing for your user (no administrator rights needed)...\n");
+    let port = std::env::var("TETRON_WEBUI_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(7870);
+    if let Err(e) = install(port) {
+        println!("\ninstall failed: {e:#}");
+    }
+    println!("\nPress Enter to close this window.");
+    let mut line = String::new();
+    let _ = std::io::stdin().read_line(&mut line);
+    true
+}
+
+/// Windows: one tray per sign-in session. A named mutex in the session's
+/// `Local\` namespace is held for the life of the tray; a second start finds
+/// it and exits instead of adding a second icon.
+#[cfg(windows)]
+pub fn already_running() -> bool {
+    use windows_sys::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+    let name: Vec<u16> = "Local\\tetron-systray"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: `name` is NUL-terminated; the handle is deliberately kept open
+    // (never closed) so the mutex lives as long as this process.
+    let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+    // SAFETY: reads this thread's last error, set by CreateMutexW.
+    !handle.is_null() && unsafe { GetLastError() } == ERROR_ALREADY_EXISTS
+}
+
 /// Windows: a per-user autostart entry, the counterpart of the systemd user
 /// unit and the LaunchAgent. The program is copied to
 /// `%LOCALAPPDATA%\Programs\tetron-systray` (so the downloaded file can be
@@ -253,7 +306,7 @@ mod windows {
     const EXE_NAME: &str = "tetron-systray.exe";
     const DEFAULT_WEBUI_PORT: u16 = 7870;
 
-    fn install_dir() -> Result<PathBuf> {
+    pub(crate) fn install_dir() -> Result<PathBuf> {
         Ok(dirs::data_local_dir()
             .context("could not determine %LOCALAPPDATA%")?
             .join("Programs")
@@ -261,13 +314,24 @@ mod windows {
     }
 
     /// Ends every other running tetron-systray of this user, never this
-    /// process (install and uninstall run as tetron-systray.exe too).
+    /// process (install and uninstall run as tetron-systray too). Matched by
+    /// image name prefix, so a copy started from the download
+    /// (`tetron-systray-x86_64-windows.exe`) is stopped too; otherwise it
+    /// would keep the one-tray lock and the installed tray would exit.
     fn stop_other_instances() {
         let pid = std::process::id().to_string();
         run_cmd_quiet(
             "taskkill",
-            &["/F", "/IM", EXE_NAME, "/FI", &format!("PID ne {pid}")],
+            &[
+                "/F",
+                "/FI",
+                "IMAGENAME eq tetron-systray*",
+                "/FI",
+                &format!("PID ne {pid}"),
+            ],
         );
+        // Let the lock of a stopped tray go before the new one starts.
+        std::thread::sleep(Duration::from_millis(500));
     }
 
     /// The autostart command line: the quoted program, plus the web UI port

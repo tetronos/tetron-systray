@@ -73,4 +73,4 @@ objc2-foundation = { version = "0.3", features = ["NSDate"] }
 # (ShellExecuteW) and lets go of the console window when it runs as the tray.
 # Same windows-sys version tetron core uses.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
