@@ -66,7 +66,8 @@ use clap::{Parser, Subcommand};
 /// by `build.rs` (e.g. `0.8.4 (a1b2c3d4)`). The SHA distinguishes two builds
 /// that share the same, unbumped crate version -- same pattern as tetron
 /// core's own `FULL_VERSION`.
-pub(crate) const FULL_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_SHA"), ")");
+pub(crate) const FULL_VERSION: &str =
+    concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_SHA"), ")");
 
 #[derive(Parser)]
 #[command(name = "tetron-systray", version = FULL_VERSION)]
@@ -84,7 +85,12 @@ enum Command {
         /// Port tetron-webui listens on. Sets `TETRON_WEBUI_PORT` in the
         /// service unit so the tray's "open webui" menu item opens the
         /// correct URL.
-        #[arg(short = 'p', long, env = "TETRON_WEBUI_PORT", default_value_t = 7870u16)]
+        #[arg(
+            short = 'p',
+            long,
+            env = "TETRON_WEBUI_PORT",
+            default_value_t = 7870u16
+        )]
         port: u16,
     },
     /// Stop and remove the per-user service
@@ -204,7 +210,10 @@ struct UiState {
 /// What the poller hands back each cycle: either the daemon's full status,
 /// or "unreachable" (connect failed, or an unexpected reply).
 enum PollResult {
-    Reachable { active: bool, networks: Vec<NetworkStatus> },
+    Reachable {
+        active: bool,
+        networks: Vec<NetworkStatus>,
+    },
     Unreachable,
 }
 
@@ -311,9 +320,9 @@ fn spawn_status_poller(
             let mut interval = initial_interval;
             loop {
                 let result = match ipc_client::call(IpcMessage::Status).await {
-                    Ok(IpcMessage::StatusResponse { active, networks, .. }) => {
-                        PollResult::Reachable { active, networks }
-                    }
+                    Ok(IpcMessage::StatusResponse {
+                        active, networks, ..
+                    }) => PollResult::Reachable { active, networks },
                     _ => PollResult::Unreachable,
                 };
                 if tx.send(result).is_err() {
@@ -356,7 +365,8 @@ fn spawn_status_poller(
 fn connect_menu_show(menu: &Menu, flag: Rc<Cell<bool>>) {
     use gtk::prelude::WidgetExt;
     use tray_icon::menu::ContextMenu;
-    menu.gtk_context_menu().connect_show(move |_| flag.set(true));
+    menu.gtk_context_menu()
+        .connect_show(move |_| flag.set(true));
 }
 
 /// Fire-and-forget an IPC action on its own short-lived thread + one-shot
@@ -365,7 +375,10 @@ fn connect_menu_show(menu: &Menu, flag: Rc<Cell<bool>>) {
 /// docs/HOWTO_Build_A_Systray.md).
 fn spawn_action(msg: IpcMessage) {
     std::thread::spawn(move || {
-        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
             Ok(rt) => rt,
             Err(e) => {
                 eprintln!("tetron-systray: failed to build action runtime: {e}");
@@ -414,7 +427,10 @@ fn open_webui() {
 /// online-first, then alphabetical by label. The `label` field includes the
 /// IP address and online/offline status -- the full display text.
 fn compute_desired_rows(net: &NetworkStatus) -> Vec<Row> {
-    let self_host = net.my_hostname.clone().unwrap_or_else(|| net.my_ip.to_string());
+    let self_host = net
+        .my_hostname
+        .clone()
+        .unwrap_or_else(|| net.my_ip.to_string());
     let mut rows: Vec<Row> = vec![Row {
         label: format!("{}  {} (you)", self_host, net.my_ip),
         ip: net.my_ip,
@@ -422,7 +438,11 @@ fn compute_desired_rows(net: &NetworkStatus) -> Vec<Row> {
     }];
     rows.extend(net.peers.iter().map(|p| {
         let host = p.hostname.clone().unwrap_or_else(|| p.ip.to_string());
-        let status = if p.connection.is_some() { "" } else { " (offline)" };
+        let status = if p.connection.is_some() {
+            ""
+        } else {
+            " (offline)"
+        };
         Row {
             label: format!("{}  {}{status}", host, p.ip),
             ip: p.ip,
@@ -467,7 +487,10 @@ fn update_network_members(net_ui: &mut NetworkUi, net: &NetworkStatus) -> anyhow
     let mut i = net_ui.members.len();
     while i > 0 {
         i -= 1;
-        if !desired[..shown].iter().any(|d| d.ip == net_ui.members[i].ip) {
+        if !desired[..shown]
+            .iter()
+            .any(|d| d.ip == net_ui.members[i].ip)
+        {
             net_ui.submenu.remove(&net_ui.members[i].item)?;
             net_ui.members.remove(i);
         }
@@ -597,23 +620,16 @@ fn build_menu_and_state(
             let shown = desired.len().min(MAX_MEMBER_ROWS);
             let mut members = Vec::with_capacity(shown);
             for (i, row) in desired[..shown].iter().enumerate() {
-                let item = MenuItem::with_id(
-                    format!("copy_member_ip:{}", row.ip),
-                    &row.label,
-                    true,
-                    None,
-                );
+                let item =
+                    MenuItem::with_id(format!("copy_member_ip:{}", row.ip), &row.label, true, None);
                 sub.insert(&item, i)?; // insert at position i keeps order
                 members.push(MemberRow { ip: row.ip, item });
             }
 
             let more_item = if desired.len() > shown {
                 let remaining = desired.len() - shown;
-                let item = MenuItem::new(
-                    format!("…and {remaining} more (open webui)"),
-                    false,
-                    None,
-                );
+                let item =
+                    MenuItem::new(format!("…and {remaining} more (open webui)"), false, None);
                 sub.append(&item)?;
                 Some(item)
             } else {
@@ -666,7 +682,13 @@ fn build_menu_and_state(
 
     menu.append(&MenuItem::with_id("quit", "Quit", true, None))?;
 
-    Ok((menu, UiState { status_item, network_uis }))
+    Ok((
+        menu,
+        UiState {
+            status_item,
+            network_uis,
+        },
+    ))
 }
 
 /// Narrow fingerprint for §3 structural changes only -- a full menu rebuild
@@ -686,11 +708,19 @@ fn structural_fingerprint(reachable: bool, networks: &[NetworkStatus]) -> String
 
 fn handle_click(id: &str) {
     if let Some(net) = id.strip_prefix("resume:") {
-        spawn_action(IpcMessage::Resume { hostname: None, network: Some(net.to_string()) });
+        spawn_action(IpcMessage::Resume {
+            hostname: None,
+            network: Some(net.to_string()),
+        });
     } else if let Some(net) = id.strip_prefix("standby:") {
-        spawn_action(IpcMessage::Standby { network: Some(net.to_string()) });
+        spawn_action(IpcMessage::Standby {
+            network: Some(net.to_string()),
+        });
     } else if id == "resume_all" {
-        spawn_action(IpcMessage::Resume { hostname: None, network: None });
+        spawn_action(IpcMessage::Resume {
+            hostname: None,
+            network: None,
+        });
     } else if id == "standby_all" {
         spawn_action(IpcMessage::Standby { network: None });
     } else if let Some(ip) = id.strip_prefix("copy_member_ip:") {
@@ -832,7 +862,10 @@ fn main() -> anyhow::Result<()> {
 
         if let Ok(result) = status_rx.try_recv() {
             match result {
-                PollResult::Reachable { active: a, networks: n } => {
+                PollResult::Reachable {
+                    active: a,
+                    networks: n,
+                } => {
                     reachable = true;
                     active = a;
                     networks = n;
@@ -845,7 +878,9 @@ fn main() -> anyhow::Result<()> {
             // §3: structural change → full rebuild of Menu + UiState.
             let structural = structural_fingerprint(reachable, &networks);
             if structural != last_structural {
-                eprintln!("tetron-systray: structural change: '{last_structural}' -> '{structural}'");
+                eprintln!(
+                    "tetron-systray: structural change: '{last_structural}' -> '{structural}'"
+                );
                 match build_menu_and_state(reachable, active, &networks) {
                     Ok((new_menu, new_ui)) => {
                         #[cfg(target_os = "linux")]
@@ -970,7 +1005,11 @@ mod tests {
         let c = PollConfig::from_env();
         assert_eq!(c.active, Duration::from_secs(3), "zero -> default");
         assert_eq!(c.idle, Duration::from_secs(300), "garbage -> default");
-        assert_eq!(c.unreachable, Duration::from_secs(45), "valid override honored");
+        assert_eq!(
+            c.unreachable,
+            Duration::from_secs(45),
+            "valid override honored"
+        );
         unsafe {
             std::env::remove_var("TETRON_SYSTRAY_POLL_ACTIVE_SECS");
             std::env::remove_var("TETRON_SYSTRAY_POLL_IDLE_SECS");

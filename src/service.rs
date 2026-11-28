@@ -114,7 +114,8 @@ pub fn install(port: u16) -> Result<()> {
         let unit = include_str!("../contrib/tetron-systray.service")
             .replace("/usr/local/bin/tetron-systray", &exe)
             .replace("__TETRON_WEBUI_PORT__", &port_str);
-        std::fs::write(&path, unit).with_context(|| format!("failed to write {}", path.display()))?;
+        std::fs::write(&path, unit)
+            .with_context(|| format!("failed to write {}", path.display()))?;
         run_cmd("systemctl", &["--user", "daemon-reload"]);
         run_cmd("systemctl", &["--user", "enable", "tetron-systray"]);
         run_cmd("systemctl", &["--user", "restart", "tetron-systray"]);
@@ -134,16 +135,24 @@ pub fn install(port: u16) -> Result<()> {
             .with_context(|| format!("failed to copy binary into {}", bundled_exe.display()))?;
         let info_plist = include_str!("../contrib/TetronSystray-Info.plist")
             .replace("__VERSION__", env!("CARGO_PKG_VERSION"));
-        std::fs::write(bundle.join("Contents/Info.plist"), info_plist)
-            .with_context(|| format!("failed to write {}", bundle.join("Contents/Info.plist").display()))?;
+        std::fs::write(bundle.join("Contents/Info.plist"), info_plist).with_context(|| {
+            format!(
+                "failed to write {}",
+                bundle.join("Contents/Info.plist").display()
+            )
+        })?;
 
         let path = plist_path()?;
         let log = log_path()?.to_string_lossy().into_owned();
         let plist = include_str!("../contrib/com.tetron.systray.plist")
-            .replace("/usr/local/bin/tetron-systray", &bundled_exe.to_string_lossy())
+            .replace(
+                "/usr/local/bin/tetron-systray",
+                &bundled_exe.to_string_lossy(),
+            )
             .replace("/tmp/tetron-systray.log", &log)
             .replace("__TETRON_WEBUI_PORT__", &port_str);
-        std::fs::write(&path, plist).with_context(|| format!("failed to write {}", path.display()))?;
+        std::fs::write(&path, plist)
+            .with_context(|| format!("failed to write {}", path.display()))?;
         run_cmd_quiet("launchctl", &["unload", &path.to_string_lossy()]);
         run_cmd("launchctl", &["load", "-w", &path.to_string_lossy()]);
     }
@@ -169,7 +178,10 @@ pub fn uninstall() -> Result<()> {
     {
         let path = unit_path()?;
         if path.exists() {
-            run_cmd("systemctl", &["--user", "disable", "--now", "tetron-systray"]);
+            run_cmd(
+                "systemctl",
+                &["--user", "disable", "--now", "tetron-systray"],
+            );
             std::fs::remove_file(&path)?;
             run_cmd("systemctl", &["--user", "daemon-reload"]);
             println!("Removed systemd --user service.");
